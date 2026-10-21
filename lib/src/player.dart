@@ -169,8 +169,15 @@ class Player {
     Libfvp.registerType(nativeHandle, 0, false);
   }
 
-  /// Release resources
-  void dispose() async {
+  Future<void>? _disposeFuture;
+
+  /// Release resources.
+  void dispose() => unawaited(disposeAsync());
+
+  /// Completes after texture, callbacks and native player have been released.
+  Future<void> disposeAsync() => _disposeFuture ??= _dispose();
+
+  Future<void> _dispose() async {
     if (_pp == nullptr) {
       textureId.dispose();
       return;
@@ -188,7 +195,10 @@ class Player {
 
     _receivePort.close();
 
-    Libmdk.instance.mdkPlayerAPI_delete(_pp);
+    // MediaCodec::stop can block in vendor drivers. Texture and callback
+    // teardown must finish here before the worker takes ownership of deletion.
+    final address = _pp.address;
+    await Isolate.run(() => _deleteNativePlayer(address));
     calloc.free(_pp);
     _pp = nullptr;
     textureId.dispose();
@@ -841,6 +851,12 @@ class Player {
   double _playbackRate = 1.0;
   Pointer<mdkMediaInfo> _mediaInfoC =
       nullptr; // MediaInfo has views on mdkMediaInfo
+}
+
+void _deleteNativePlayer(int address) {
+  Libmdk.instance.mdkPlayerAPI_delete(
+    Pointer<Pointer<mdkPlayerAPI>>.fromAddress(address),
+  );
 }
 
 final class _CallbackReply extends Union {
